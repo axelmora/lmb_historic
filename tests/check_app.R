@@ -13,6 +13,9 @@ testServer(app, {
   session$setInputs(tl_orden = "debut", tl_filtro = "todos", tl_years = c(1925, 2026), tl_star = TRUE, tl_zone = TRUE)
   invisible(output$tl_ui); invisible(output$tl_plot); invisible(output$tl_tbl)
   for (f in c("activos", "titulo", "cambios")) { session$setInputs(tl_filtro = f); invisible(output$tl_plot) }
+  session$setInputs(ht_stat = HITOS_STAT$stat, ht_dist = 10, ht_q = "")
+  invisible(output$ht_kpi); invisible(output$ht_p1); invisible(output$ht_p2); invisible(output$ht_cruz); invisible(output$ht_near); invisible(output$ht_lead); invisible(output$ht_qa)
+  session$setInputs(ht_q = "murillo", ht_stat = c("HR", "G")); invisible(output$ht_near); invisible(output$ht_lead)
   invisible(output$qa_tables)
   cat("OK: todas las salidas se renderizan sin error\n")
 })

@@ -13,6 +13,15 @@ Datos: `data/lmb_regular_post_seasons_historic.xlsx` (5 hojas: standings_1925_20
 - **Récord por identidad:** en Equipos, cada nombre usado trae años, temporadas, récord regular, récord de postemporada, títulos y campeonatos de zona.
 - **Línea de tiempo:** nueva pestaña con una barra por nombre de cada equipo (catálogo + hoja long), ★ de campeonatos, ◆ de campeón de zona, banda de 2020 y filtros por orden, años y tipo de equipo.
 
+## Hitos (etl_milestones)
+Pestaña **Hitos** con los resultados de `etl_milestones`. Lee cuatro CSV de `data/hitos/`: `hitos_bateo.csv`, `hitos_pitcheo.csv`, `cercanos_bateo.csv` y `cercanos_pitcheo.csv`. Para actualizar, reemplaza los cuatro archivos; el año de corte se toma de las columnas `carrera_AAAA` y `temporada_AAAA`.
+- **Resumen:** hitos cruzados, hitos cercanos y marcas inminentes, con dos gráficas.
+- **Hitos cruzados:** jugadores que pasaron un umbral redondo en la temporada.
+- **Cerca de un hito:** lo que falta para el siguiente umbral, con barra de avance.
+- **Cerca de líderes históricos:** cuánto falta para empatar o superar a un líder de carrera.
+- **Validación:** revisa que carrera actual = carrera previa + temporada, que los cruzados cumplan la regla y que las distancias cuadren.
+Filtros: estadística, "faltan como máximo" (no limita los cruzados) y búsqueda por jugador. Paquete adicional: `stringi`.
+
 ## Identidad de equipo
 Cada equipo es un `team_id` del catálogo (73). El nombre de cada temporada viene de `equipos_long_format.nombre_temporada`; en Equipos e Historial se listan todos los nombres con sus años. Mariachis de Guadalajara (id 72, 2021-2023) es un equipo aparte de Charros de Jalisco (id 47).
 Standings y series se ligan al `team_id` por nombre (sin acentos ni mayúsculas) dentro de la temporada. Lo que no coincide exacto se resuelve por catálogo, por descarte o por mismo nombre en otras temporadas, y queda listado en **Método y calidad**.
@@ -33,6 +42,11 @@ Standings y series se ligan al `team_id` por nombre (sin acentos ni mayúsculas)
 - 15 temporadas donde G total no iguala P total (transcritas del "quién es quién" de la LMB; pendientes de cotejar).
 - Campeón sin serie final: 36 temporadas definidas por mejor récord.
 - En 1953 la hoja long dice "Indios Verdes de Anáhuac" para Agrario (id 32); confirmar si debe ser "Indios de Anáhuac".
+
+## Pendientes de Hitos
+- En `cercanos_pitcheo.csv`, la estadística CJ trae un solo líder (Antonio Barbosa, 19) para los 271 pitchers, casi todos con 0. Con el filtro por defecto no aparecen, pero conviene revisar la tabla de líderes de CJ.
+- Líder activo con marca desactualizada: Moisés Gutiérrez (102 HR) aparece persiguiendo a Yadir Drake con 103, pero Drake ya suma 113. La app lo marca en la columna Nota.
+- Los CSV no traen equipo del jugador, por lo que no se puede filtrar por club.
 
 ## Pruebas
 `Rscript tests/check_app.R` renderiza todas las salidas del servidor sin navegador.

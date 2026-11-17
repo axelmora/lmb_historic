@@ -9,12 +9,20 @@ suppressPackageStartupMessages({
   library(dplyr); library(tidyr); library(stringr); library(htmltools)
 })
 source("R/prep.R", local = TRUE)
+source("R/hitos.R", local = TRUE)
 
 DATA_XLSX <- "data/lmb_regular_post_seasons_historic.xlsx"
 D     <- load_lmb(DATA_XLSX)
 REACH <- reach_table(D)
 IDENT <- build_identities(D)
+# Series de postemporada de cada equipo por temporada (texto: una serie por línea, separadas por " | ")
+SERIES_TXT <- bind_rows(
+  D$tp |> arrange(season, ronda_id) |> transmute(season, team_id, o = ronda_id,
+    txt = paste0(if_else(gano == 1, "✓ ", "✗ "), ronda_corta, " vs ", opp, " ", gw, "-", gl)),
+  D$rr |> transmute(season, team_id, o = 9L, txt = paste0("Round robin ", G, "-", P))) |>
+  arrange(season, team_id, o) |> group_by(season, team_id) |> summarise(series = paste(txt, collapse = " | "), .groups = "drop")
 SEASON_CHOICES <- with(D$seasons |> filter(hay_datos) |> arrange(desc(season)), setNames(season, paste0(etiqueta, ifelse(cancelada, " · cancelada", ""))))
+HT <- load_hitos()   # NULL si faltan los CSV en data/hitos
 CANCEL_MOTIVO <- c("2020" = "pandemia de COVID-19")
 ZC_LOOKUP <- D$zc |> select(season, team_id, zn)
 CANON <- setNames(D$cat$equipo, D$cat$team_id)
@@ -152,6 +160,20 @@ ui <- page_navbar(
   nav_panel("Historial", helpText("Temporada regular: standing Final si existe; si solo hay dos vueltas se suman; el global nunca se suma. Postemporada: juegos de todas las series (y round robin de 1983). Cada fila es un equipo del catálogo, con todos sus nombres."),
             DTOutput("hi_tbl"), plotlyOutput("hi_plot", height = 340)),
   nav_panel("Campeones", layout_columns(col_widths = c(8, 4), DTOutput("ch_tbl"), div(h5("Managers campeones"), DTOutput("mg_tbl")))),
+  nav_panel("Hitos", if (is.null(HT)) div(class = "cancel-box", "No se encontraron los CSV de etl_milestones en data/hitos (hitos_bateo, hitos_pitcheo, cercanos_bateo, cercanos_pitcheo).") else
+    layout_sidebar(sidebar = sidebar(width = 270,
+      checkboxGroupInput("ht_stat", "Estadística", choices = setNames(HITOS_STAT$stat, paste0(HITOS_STAT$etiqueta, " · ", HITOS_STAT$rol)), selected = HITOS_STAT$stat),
+      sliderInput("ht_dist", "Faltan como máximo", 1, 100, 10, step = 1),
+      textInput("ht_q", "Buscar jugador", placeholder = "Apellido o nombre"),
+      helpText(paste0("Carrera hasta ", HT$anio_base, " (Quién es Quién) más la temporada ", HT$anio_corte, " (ETL). ",
+                      "Hito cruzado: el jugador pasó el umbral en ", HT$anio_corte, ". Cerca de un hito: lo que falta para el siguiente umbral redondo. ",
+                      "El slider no limita los hitos cruzados."))),
+      navset_tab(
+        nav_panel("Resumen", uiOutput("ht_kpi"), layout_columns(col_widths = c(7, 5), plotlyOutput("ht_p1", height = 430), plotlyOutput("ht_p2", height = 430))),
+        nav_panel("Hitos cruzados", DTOutput("ht_cruz")),
+        nav_panel("Cerca de un hito", DTOutput("ht_near")),
+        nav_panel("Cerca de líderes históricos", helpText("Cuánto le falta a cada jugador para empatar o superar la marca de un líder histórico de carrera. Si el líder sigue activo, su marca puede estar desactualizada (ver Nota)."), DTOutput("ht_lead")),
+        nav_panel("Validación", uiOutput("ht_qa"))))),
   nav_panel("Línea de tiempo", layout_sidebar(sidebar = sidebar(width = 270,
       selectInput("tl_orden", "Ordenar equipos por", c("Año de debut" = "debut", "Nombre del catálogo" = "nombre", "Última temporada" = "ultima")),
       selectInput("tl_filtro", "Mostrar", c("Todos los equipos" = "todos", "Activos en la última temporada" = "activos", "Con campeonato" = "titulo", "Con cambios de nombre" = "cambios")),
@@ -269,10 +291,15 @@ server <- function(input, output, session) {
       layout(font = list(family = "Public Sans"), xaxis = list(title = "", tickangle = -60), yaxis = list(title = "PCT", range = c(0, 1)), legend = list(orientation = "h", y = 1.15),
              shapes = list(list(type = "line", x0 = 0, x1 = 1, xref = "paper", y0 = .5, y1 = .5, line = list(color = C$mid, dash = "dot"))))
   })
-  tm_out <- reactive(team_seasons() |> transmute(Temporada = tag, `Nombre ese año` = team, Bloque = zona, `Regla aplicada` = regla, G, P, PCT = round(pct, 3),
+  tm_out <- reactive(team_seasons() |> left_join(SERIES_TXT, by = c("season", "team_id")) |> transmute(Temporada = tag, `Nombre ese año` = team, Bloque = zona, G, P, PCT = round(pct, 3),
       Lugar = if_else(is.na(pos_bloque), "—", paste0(pos_bloque, "°", if_else(is.na(pos_global), "", paste0(" (global ", pos_global, "°)")))),
-      Postemporada = llego, `Campeón de zona` = if_else(es_zc, coalesce(zona_camp, "Sí"), ""), `Manager campeón` = if_else(es_campeon, coalesce(manager, ""), "")))
-  output$tm_tbl <- renderDT(dt_es(tm_out(), page = 12) |> formatRound("PCT", 3))
+      Postemporada = llego, `Series de postemporada` = coalesce(series, ""), `Campeón de zona` = if_else(es_zc, coalesce(zona_camp, "Sí"), ""),
+      `Manager campeón` = if_else(es_campeon, coalesce(manager, ""), ""), `Regla aplicada` = regla))
+  output$tm_tbl <- renderDT({
+    d <- tm_out() |> mutate(`Series de postemporada` = vapply(`Series de postemporada`, function(x)
+      paste0(vapply(strsplit(x, " | ", fixed = TRUE)[[1]], \(l) paste0("<span style='white-space:nowrap'>", htmlEscape(l), "</span>"), ""), collapse = "<br>"), ""))
+    dt_es(d, page = 12, escape = FALSE) |> formatRound("PCT", 3)
+  })
   output$tm_dl <- downloadHandler(function() paste0("lmb_", str_replace_all(tolower(CANON[[as.character(tid())]]), "[^a-z0-9]+", "_"), ".csv"),
                                   function(file) write.csv(tm_out(), file, row.names = FALSE, fileEncoding = "UTF-8"))
 
@@ -313,6 +340,59 @@ server <- function(input, output, session) {
       colors = c("#1E293B", "#D97706", "#64748B", "#F59E0B", "#0F766E", "#94A3B8", "#7C2D12", "#475569", "#B45309", "#334155", "#0EA5E9", "#CBD5E1"),
       text = ~paste0(etiqueta, ": ", estructura), hoverinfo = "text") |>
       layout(font = list(family = "Public Sans"), barmode = "stack", yaxis = list(visible = FALSE), xaxis = list(title = ""), legend = list(orientation = "h", y = -.2)))
+
+  # ---- Hitos
+  if (!is.null(HT)) {
+    ht_q <- reactive({ q <- str_to_lower(stringi::stri_trans_general(str_squish(input$ht_q %||% ""), "Latin-ASCII")); q })
+    ht_f <- function(df) { st <- input$ht_stat %||% character(); q <- ht_q(); df <- filter(df, stat %in% st); if (nzchar(q)) df <- filter(df, str_detect(llave, fixed(q))); df }
+    ht_cruz <- reactive(ht_f(HT$hitos) |> filter(tipo == "cruzado"))
+    ht_near <- reactive(ht_f(HT$hitos) |> filter(tipo == "aspirante", distancia <= input$ht_dist))
+    ht_lead <- reactive(ht_f(HT$lideres) |> filter(distancia <= input$ht_dist))
+    output$ht_kpi <- renderUI({
+      cz <- ht_cruz(); nr <- ht_near(); ld <- ht_lead()
+      div(class = "stats",
+        stat_box(paste("Hitos cruzados en", HT$anio_corte), nrow(cz), paste(n_distinct(cz$jugador), "jugadores"), hl = TRUE),
+        stat_box("Cerca de un hito", nrow(nr), paste0("a ", input$ht_dist, " o menos")),
+        stat_box("Cerca de un líder histórico", nrow(ld), paste0("a ", input$ht_dist, " o menos")),
+        stat_box("A menos de 3", sum(nr$distancia < 3) + sum(ld$distancia < 3 & !ld$lider_desactualizado), "hitos y marcas inminentes"))
+    })
+    pal <- c(Bateo = C$slate, Pitcheo = C$amber)
+    output$ht_p1 <- renderPlotly({
+      d <- ht_near() |> arrange(distancia, desc(avance)) |> head(15) |> mutate(lab = factor(paste0(nombre, " · ", hito), rev(paste0(nombre, " · ", hito))))
+      validate(need(nrow(d) > 0, "Sin hitos con esos filtros"))
+      plot_ly(d, y = ~lab, x = ~distancia, color = ~rol, colors = pal, type = "bar", orientation = "h",
+              text = ~paste0(nombre, "<br>", hito, "<br>Carrera: ", carrera_actual, " (+", temporada, " en ", HT$anio_corte, ")<br>Faltan ", distancia), hoverinfo = "text") |>
+        layout(font = list(family = "Public Sans"), title = list(text = "Los 15 hitos más cercanos", x = 0), xaxis = list(title = "Faltan"), yaxis = list(title = ""),
+               margin = list(l = 290), legend = list(orientation = "h", y = -.12))
+    })
+    output$ht_p2 <- renderPlotly({
+      d <- ht_cruz() |> count(stat, rol) |> left_join(HITOS_STAT |> select(stat, corto), by = "stat") |> arrange(desc(n))
+      validate(need(nrow(d) > 0, "Sin hitos cruzados con esos filtros"))
+      plot_ly(d, x = ~factor(corto, corto), y = ~n, color = ~rol, colors = pal, type = "bar", text = ~n, textposition = "outside", hoverinfo = "text",
+              hovertext = ~paste0(n, " jugadores cruzaron un hito de ", corto)) |>
+        layout(font = list(family = "Public Sans"), title = list(text = paste("Hitos cruzados en", HT$anio_corte, "por estadística"), x = 0), xaxis = list(title = ""), yaxis = list(title = ""), showlegend = FALSE)
+    })
+    output$ht_cruz <- renderDT(ht_cruz() |> arrange(desc(rol), stat, desc(umbral), desc(temporada)) |>
+      transmute(Jugador = nombre, Hito = hito, Estadística = etiqueta, Rol = rol, !!paste0("Carrera ", HT$anio_base) := carrera_prev,
+                !!paste0("+", HT$anio_corte) := temporada, `Carrera actual` = carrera_actual) |> dt_es(page = 20))
+    output$ht_near <- renderDT(ht_near() |> arrange(distancia, desc(avance)) |>
+      transmute(Jugador = nombre, Hito = hito, Estadística = etiqueta, `Carrera actual` = carrera_actual, !!paste0("+", HT$anio_corte) := temporada, Faltan = distancia, Avance = avance) |>
+      dt_es(page = 20) |> formatPercentage("Avance", 0) |>
+      formatStyle("Avance", background = styleColorBar(c(0, 1), "#CBD5E1"), backgroundSize = "100% 70%", backgroundRepeat = "no-repeat", backgroundPosition = "center") |>
+      formatStyle("Faltan", fontWeight = "bold", color = styleInterval(c(3, 10), c("#B45309", C$ink, C$mid))))
+    output$ht_lead <- renderDT(ht_lead() |> arrange(distancia, stat) |>
+      transmute(Jugador = nombre, Estadística = etiqueta, `Carrera actual` = carrera_actual, `Líder histórico` = lider_objetivo, `Marca del líder` = lider_valor,
+                `Para empatar` = distancia, `Para superar` = distancia + 1L, Nota = nota) |> dt_es(page = 20) |>
+      formatStyle("Para empatar", fontWeight = "bold", color = styleInterval(c(3, 10), c("#B45309", C$ink, C$mid))))
+    output$ht_qa <- renderUI({
+      q <- HT$qa; nm <- c(lideres_por_stat = "Líderes históricos por estadística (cercanos_*.csv)", lider_desactualizado = "Líder activo con marca desactualizada (su carrera actual ya supera la marca usada)", suma = "Carrera actual distinta a carrera previa + temporada",
+        cruzados = "Hitos cruzados que no cumplen la regla (previa < umbral <= actual)", aspirantes = "Aspirantes con distancia inconsistente",
+        duplicados = "Jugador-estadística repetidos", lider_distancia = "Distancia al líder distinta a marca - carrera", sin_hitos = "Jugadores en cercanos sin fila en hitos")
+      tagList(helpText("Todas las reglas pasan salvo lo que aparezca con filas en las tablas de abajo."),
+        lapply(names(nm), function(k) { id <- paste0("htqa_", k); local({ k <- k; output[[id]] <- renderDT(dt_es(q[[k]], page = 6)) })
+          div(class = "mb-3", h6(paste0(nm[[k]], " (", nrow(q[[k]]), ")")), DTOutput(id)) }))
+    })
+  }
 
   # ---- Línea de tiempo
   tl_runs <- reactive({
